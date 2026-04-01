@@ -1,0 +1,17 @@
+# Python build artifacts
+*.egg-info/
+__pycache__/
+*.pyc
+
+# Local environment config (contains user-specific paths)
+.env
+
+# Virtual environments
+.venv*/
+
+# pytest cache
+.pytest_cache/
+
+# AllSpark files
+*.lsfx
+*.lsefx

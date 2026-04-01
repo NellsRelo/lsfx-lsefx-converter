@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lsfx-converter"
+version = "0.1.0"
+description = "Two-way converter between BG3 runtime .lsfx (binary) and BG3 Toolkit .lsefx (XML) effect files"
+requires-python = ">=3.13"
+license = {text = "MIT"}
+authors = [{name = "BG3 CMTY Studio Contributors"}]
+readme = "README.md"
+dependencies = [
+    "lz4>=4.3.0,<5",
+]
+
+[project.urls]
+Repository = "https://github.com/bg3-cmty-studio/lsfx-converter"
+
+[project.scripts]
+lsfx-converter = "converter.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pip-audit>=2.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["converter*"]
