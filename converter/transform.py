@@ -28,6 +28,7 @@ from .effect_model import (
     EffectResource,
     Keyframe,
     Module,
+    PlatformMetadata,
     Property,
     PropertyGroup,
     RampChannel,
@@ -411,9 +412,18 @@ def _decompile_keyframed_property(prop_node: LsxNode, comp: Component,
             keyframes=keyframes,
         ))
 
+    # Single-channel ramps omit the selected attribute entirely
+    if len(channels) == 1:
+        channels[0].selected = None
+
     rcd = RampChannelData(channels=channels)
     datum = Datum(ramp_channel_data=rcd)
-    comp.properties.append(Property(guid=prop_guid, data=[datum]))
+    prop = Property(guid=prop_guid, data=[datum])
+
+    # Ramp/keyframed properties get default PlatformMetadata (editor UI state)
+    prop.platform_metadata.append(PlatformMetadata(platform=NIL_UUID))
+
+    comp.properties.append(prop)
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -11,13 +11,14 @@ class Keyframe:
     time: str
     value: str
     interpolation: str | None = None
+    is_control_point: bool = False
 
 
 @dataclass
 class RampChannel:
-    channel_type: str          # "Linear", "Spline", etc.
+    channel_type: str          # "Linear", "Spline", "FreeTangentSpline"
     id: str                    # UUID
-    selected: bool = False
+    selected: bool | None = False   # None = omit attribute (single-channel ramps)
     keyframes: list[Keyframe] = field(default_factory=list)
 
 

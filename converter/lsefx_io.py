@@ -159,10 +159,15 @@ def _parse_datum(el: ET.Element) -> Datum:
 def _parse_rampchanneldata(el: ET.Element) -> RampChannelData:
     rcd = RampChannelData()
     for rc_el in el.findall("rampchannel"):
+        raw_selected = rc_el.get("selected")
+        if raw_selected is None:
+            selected_val = None
+        else:
+            selected_val = raw_selected.lower() == "true"
         channel = RampChannel(
             channel_type=rc_el.get("type", "Linear"),
             id=rc_el.get("id", ""),
-            selected=rc_el.get("selected", "False").lower() == "true",
+            selected=selected_val,
         )
         kfs_el = rc_el.find("keyframes")
         if kfs_el is not None:
@@ -171,6 +176,7 @@ def _parse_rampchanneldata(el: ET.Element) -> RampChannelData:
                     time=kf_el.get("time", "0"),
                     value=kf_el.get("value", "0"),
                     interpolation=kf_el.get("interpolation"),
+                    is_control_point=kf_el.get("is_control_point") == "True",
                 ))
         rcd.channels.append(channel)
     return rcd
@@ -288,7 +294,8 @@ def _write_rampchanneldata(parent: ET.Element, rcd: RampChannelData) -> None:
         ch_el = ET.SubElement(rcd_el, "rampchannel")
         ch_el.set("type", ch.channel_type)
         ch_el.set("id", ch.id)
-        ch_el.set("selected", "True" if ch.selected else "False")
+        if ch.selected is not None:
+            ch_el.set("selected", "True" if ch.selected else "False")
 
         kfs_el = ET.SubElement(ch_el, "keyframes")
         for kf in ch.keyframes:
@@ -297,3 +304,5 @@ def _write_rampchanneldata(parent: ET.Element, rcd: RampChannelData) -> None:
             kf_el.set("value", kf.value)
             if kf.interpolation is not None:
                 kf_el.set("interpolation", kf.interpolation)
+            if kf.is_control_point:
+                kf_el.set("is_control_point", "True")
