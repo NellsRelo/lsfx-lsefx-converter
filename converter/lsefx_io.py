@@ -81,7 +81,7 @@ def _parse_track(el: ET.Element) -> Track:
         name=el.get("name", "Track"),
         muted=el.get("muted", "False"),
         locked=el.get("locked", "False"),
-        mute_state_override=el.get("mutestateoverride", "Unmuted"),
+        mute_state_override=el.get("mutestateoverride", "None"),
     )
     for comp_el in el.findall("component"):
         track.components.append(_parse_component(comp_el))

@@ -77,7 +77,7 @@ class Track:
     name: str = "Track"
     muted: str = "False"
     locked: str = "False"
-    mute_state_override: str = "Unmuted"
+    mute_state_override: str = "None"
     components: list[Component] = field(default_factory=list)
 
 

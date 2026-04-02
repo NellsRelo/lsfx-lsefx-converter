@@ -493,7 +493,7 @@ def _rtv_u32(r: BinaryIO, length: int) -> _ValResult:
     return (str(_read_u32(r)), None, None, _EMPTY_ARGS)
 
 def _rtv_f32(r: BinaryIO, length: int) -> _ValResult:
-    return (str(_read_f32(r)), None, None, _EMPTY_ARGS)
+    return (_fmt_f32(_read_f32(r)), None, None, _EMPTY_ARGS)
 
 def _rtv_f64(r: BinaryIO, length: int) -> _ValResult:
     return (str(_read_f64(r)), None, None, _EMPTY_ARGS)
@@ -504,11 +504,11 @@ def _rtv_ivec(r: BinaryIO, length: int, *, cols: int) -> _ValResult:
 
 def _rtv_fvec(r: BinaryIO, length: int, *, cols: int) -> _ValResult:
     vals = struct.unpack(f"<{cols}f", _read_exact(r, 4 * cols))
-    return (" ".join(str(v) for v in vals), None, None, _EMPTY_ARGS)
+    return (" ".join(_fmt_f32(v) for v in vals), None, None, _EMPTY_ARGS)
 
 def _rtv_matrix(r: BinaryIO, length: int, *, total: int) -> _ValResult:
     vals = struct.unpack(f"<{total}f", _read_exact(r, 4 * total))
-    return (" ".join(str(v) for v in vals), None, None, _EMPTY_ARGS)
+    return (" ".join(_fmt_f32(v) for v in vals), None, None, _EMPTY_ARGS)
 
 def _rtv_bool(r: BinaryIO, length: int) -> _ValResult:
     return ("True" if _read_u8(r) != 0 else "False", None, None, _EMPTY_ARGS)
@@ -699,3 +699,20 @@ def _read_f32(r: BinaryIO) -> float:
 
 def _read_f64(r: BinaryIO) -> float:
     return struct.unpack("<d", _read_exact(r, 8))[0]
+
+
+def _fmt_f32(val: float) -> str:
+    """Format a float32 value with minimal decimal places that round-trip.
+
+    Finds the shortest decimal representation such that packing back to
+    float32 yields the same binary value.  Strips trailing zeros and the
+    decimal point when the result is an integer (e.g. ``0`` not ``0.0``).
+    """
+    packed = struct.pack("<f", val)
+    for decimals in range(0, 10):
+        formatted = f"{val:.{decimals}f}"
+        if struct.pack("<f", float(formatted)) == packed:
+            if "." in formatted:
+                formatted = formatted.rstrip("0").rstrip(".")
+            return formatted
+    return str(val)

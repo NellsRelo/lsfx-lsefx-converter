@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import uuid
+import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
 from . import _output
@@ -21,11 +22,14 @@ from .errors import TransformError
 _NS_LSFX = uuid.UUID("b7e3f1a0-8c4d-4e6f-9a2b-1d0c5e7f8a9b")
 
 from .effect_model import (
+    NIL_UUID,
     Component,
     Datum,
     EffectResource,
     Keyframe,
+    Module,
     Property,
+    PropertyGroup,
     RampChannel,
     RampChannelData,
     Track,
@@ -88,6 +92,10 @@ FRAME_TYPE_SPLINE = 1
 _EDITOR_ONLY_PROPERTY_GUIDS = {
     "035b5248-d0ca-44b7-853f-3acb84110e67",  # Start / End Time
 }
+
+# Well-known AllSpark property GUIDs synthesized during decompilation.
+_GUID_COMPONENT_NAME = "ef1d7d1e-02b6-4548-80d9-5ef2fbcda237"
+_GUID_START_END_TIME = "035b5248-d0ca-44b7-853f-3acb84110e67"
 
 
 # ── Resource display-name stripping ─────────────────────────────────
@@ -166,6 +174,17 @@ def lsx_to_effect(resource: LsxResource, registry: AllSparkRegistry) -> EffectRe
         _output.warnings.warn("No 'Effect' region found in LsxResource")
         return effect
 
+    # Extract Effect-level attributes from the root Effect node
+    effect_node = None
+    for node in effect_region.nodes:
+        if node.id == "Effect":
+            effect_node = node
+            break
+
+    if effect_node is not None:
+        effect.id = effect_node.attr_value("ID", NIL_UUID)
+        _extract_phases(effect_node, effect, registry)
+
     # Collect all EffectComponent nodes from the tree
     all_components: list[LsxNode] = []
     _find_effect_components(effect_region.nodes, all_components)
@@ -185,28 +204,68 @@ def _find_effect_components(nodes: list[LsxNode], result: list[LsxNode]) -> None
             _find_effect_components(node.children, result)
 
 
+def _extract_phases(effect_node: LsxNode, effect: EffectResource,
+                    registry: AllSparkRegistry) -> None:
+    """Extract Phase nodes from the binary and convert to toolkit <object> elements.
+
+    Phase identity (Lead In / Loop / Lead Out) is positional — the binary stores
+    phases in a fixed order that matches the PhaseDefinition order in the XCD.
+    """
+    for child in effect_node.children:
+        if child.id != "Phases":
+            continue
+        for idx, phase_node in enumerate(child.children_with_id("Phase")):
+            duration = phase_node.attr_value("Duration", "0")
+            play_count = phase_node.attr_value("PlayCount", "1")
+
+            # Generate a deterministic instance UUID for the phase data element
+            phase_seed = f"phase:{duration}:{play_count}:{idx}"
+            phase_id = str(uuid.uuid5(_NS_LSFX, phase_seed))
+
+            # definitionid comes from the XCD PhaseDefinition list (positional)
+            if idx < len(registry.phase_definition_ids):
+                defn_id = registry.phase_definition_ids[idx]
+            else:
+                defn_id = str(uuid.uuid5(_NS_LSFX, f"phasedef:{phase_seed}"))
+
+            obj_el = ET.Element("object")
+            obj_el.set("class", "")
+            obj_el.set("classid", NIL_UUID)
+            obj_el.set("assembly", "")
+
+            data_el = ET.SubElement(obj_el, "data")
+            data_el.set("id", phase_id)
+            data_el.set("duration", duration)
+            data_el.set("playcount", play_count)
+            data_el.set("definitionid", defn_id)
+
+            effect.phases.append(obj_el)
+        break
+
+
 def _decompile_into_trackgroups(components: list[LsxNode], effect: EffectResource,
                                 registry: AllSparkRegistry) -> None:
-    """Group runtime EffectComponent nodes by Track index into tracks.
+    """Group runtime EffectComponent nodes by Track index into track groups.
 
-    The runtime format uses a flat @Track uint32 index. Each unique Track value
-    becomes one Track inside a single TrackGroup (since trackgroup boundaries
-    are not preserved in the runtime format).
+    The runtime format uses a flat @Track uint32 index.  Each unique Track value
+    becomes its own TrackGroup, with one Track per component within that group.
+    The original TrackGroup IDs are not preserved in the binary, so we assign
+    sequential IDs starting from 1.
     """
     track_map: dict[int, list[LsxNode]] = {}
     for node in components:
         track_idx = _int_attr(node, "Track")
         track_map.setdefault(track_idx, []).append(node)
 
-    tg = TrackGroup(name="New Track Group", ids=[TrackGroupId(value="1")])
-
+    tg_id = 1
     for track_idx in sorted(track_map.keys()):
-        track = Track(name="Track")
+        tg = TrackGroup(name="New Track Group", ids=[TrackGroupId(value=str(tg_id))])
         for comp_node in track_map[track_idx]:
+            track = Track(name="Track", mute_state_override="None")
             track.components.append(_decompile_component(comp_node, registry))
-        tg.tracks.append(track)
-
-    effect.track_groups.append(tg)
+            tg.tracks.append(track)
+        effect.track_groups.append(tg)
+        tg_id += 1
 
 
 def _decompile_component(node: LsxNode, registry: AllSparkRegistry) -> Component:
@@ -231,13 +290,32 @@ def _decompile_component(node: LsxNode, registry: AllSparkRegistry) -> Component
             props_container = child
             break
 
-    if props_container is None:
-        return comp
+    if props_container is not None:
+        for prop_node in props_container.children:
+            if prop_node.id != "Property":
+                continue
+            _decompile_property(prop_node, comp, registry)
 
-    for prop_node in props_container.children:
-        if prop_node.id != "Property":
-            continue
-        _decompile_property(prop_node, comp, registry)
+    # Synthesize Start/End Time — an editor-only property stored as component
+    # attributes in the binary.  Insert after the Name property (index 1).
+    start_end_prop = Property(
+        guid=_GUID_START_END_TIME,
+        data=[Datum(value=f"{start},{end}")],
+    )
+    insert_pos = min(1, len(comp.properties))
+    comp.properties.insert(insert_pos, start_end_prop)
+
+    # Reconstruct PropertyGroup — the toolkit assigns a unique GUID per
+    # component instance; we generate a deterministic one from the instance name.
+    pg_id = str(uuid.uuid5(_NS_LSFX, f"pg:{comp.instance_name}"))
+    comp.property_groups.append(PropertyGroup(guid=pg_id, name="Property Group"))
+
+    # Reconstruct Modules — determine which modules this component uses
+    # based on the property GUIDs resolved during decompilation.
+    prop_guids = [p.guid for p in comp.properties]
+    module_guids = registry.resolve_component_modules(class_name, prop_guids)
+    for idx, mod_guid in enumerate(module_guids):
+        comp.modules.append(Module(guid=mod_guid, muted="False", index=idx))
 
     return comp
 

@@ -74,6 +74,13 @@ class AllSparkRegistry:
         # FullName mappings derived from propertygroup hierarchy
         self.guid_to_full_name: dict[str, dict[str, str]] = {}  # comp → {guid → dotted_path}
         self.full_name_to_guid: dict[str, dict[str, str]] = {}  # comp → {dotted_path → guid}
+        # Required-module properties — scoped per component type via the
+        # component="..." attribute in the XMD.  {(component, name) → guid}
+        self._required_comp_name_to_guid: dict[tuple[str, str], str] = {}
+        # Reverse mapping: property GUID → module GUID (for module reconstruction)
+        self._prop_guid_to_module_guid: dict[str, str] = {}
+        # Phase definition GUIDs from XCD (positional: Lead In, Loop, Lead Out)
+        self.phase_definition_ids: list[str] = []
         # Resolution caches (populated lazily)
         self._name_to_guid_cache: dict[tuple, str | None] = {}
         self._guid_to_name_cache: dict[tuple, str | None] = {}
@@ -140,6 +147,16 @@ class AllSparkRegistry:
 
             # Parse propertygroup hierarchy for FullName dotted paths
             self._parse_propertygroup_hierarchy(comp_el, comp_name)
+
+        # Parse PhaseDefinition objects from the <phases> section
+        phases_el = root.find("phases")
+        if phases_el is not None:
+            for obj_el in phases_el.findall("object"):
+                data_el = obj_el.find("data")
+                if data_el is not None:
+                    phase_id = (data_el.get("id") or "").lower()
+                    if phase_id:
+                        self.phase_definition_ids.append(phase_id)
 
     def _parse_propertygroup_hierarchy(self, comp_el: ET.Element, comp_name: str) -> None:
         """Parse the <propertygroup> hierarchy within a component to build FullName dotted paths.
@@ -227,6 +244,13 @@ class AllSparkRegistry:
                     # These module-defined properties also participate in the
                     # global GUID → name mapping
                     self.guid_to_name[prop_guid] = prop_name
+                    # Track which module each property belongs to
+                    self._prop_guid_to_module_guid[prop_guid] = guid
+                    # "Required" module properties are scoped per component
+                    if name == "Required":
+                        prop_comp = prop_el.get("component", "")
+                        if prop_comp:
+                            self._required_comp_name_to_guid[(prop_comp, prop_name)] = prop_guid
 
             self.modules[name] = mod_def
             self.module_guid_to_name[guid] = name
@@ -278,6 +302,10 @@ class AllSparkRegistry:
             found = comp_map.get(name)
             if found:
                 return found
+        # Module Required properties are scoped per component type
+        required = self._required_comp_name_to_guid.get((component_class, name))
+        if required:
+            return required
         # Fall back to global flat dict (module properties are not component-scoped)
         return self._global_name_to_guid.get(name)
 
@@ -296,9 +324,23 @@ class AllSparkRegistry:
         if key in self._name_to_guid_cache:
             return self._name_to_guid_cache[key]
 
-        guid = self.resolve_full_name_to_guid(component_class, full_name)
-        if guid is None and full_name != attr_name:
-            guid = self.resolve_full_name_to_guid(component_class, attr_name)
+        # 1. Dotted FullNames (e.g. "Custom.Float 01.Name") resolve via the
+        #    component's propertygroup hierarchy.
+        comp_fn_map = self.full_name_to_guid.get(component_class)
+        guid = comp_fn_map.get(full_name) if comp_fn_map else None
+        if guid is None and full_name != attr_name and comp_fn_map:
+            guid = comp_fn_map.get(attr_name)
+
+        # 2. Bare names (no dots) that match a Required-module property
+        #    resolve to the component-scoped Required GUID — these are
+        #    properties like "Name" and "Visible" that every component
+        #    inherits, but with distinct GUIDs per component type.
+        if guid is None and "." not in full_name:
+            guid = self._required_comp_name_to_guid.get((component_class, full_name))
+        if guid is None and "." not in attr_name and full_name != attr_name:
+            guid = self._required_comp_name_to_guid.get((component_class, attr_name))
+
+        # 3. Component-scoped name → GUID, then global fallback.
         if guid is None:
             guid = self.resolve_property_name(component_class, full_name)
         if guid is None and full_name != attr_name:
@@ -322,3 +364,27 @@ class AllSparkRegistry:
 
         self._guid_to_name_cache[key] = name
         return name
+
+    def resolve_component_modules(self, component_class: str,
+                                  property_guids: list[str]) -> list[str]:
+        """Return ordered list of module GUIDs for a component based on its properties.
+
+        The Required module is always first.  Non-Required modules are added in
+        the order their properties are first encountered in *property_guids*.
+        """
+        required_guid = self.module_name_to_guid.get("Required", "").lower()
+
+        seen: set[str] = set()
+        result: list[str] = []
+
+        if required_guid:
+            result.append(required_guid)
+            seen.add(required_guid)
+
+        for pg in property_guids:
+            mod_guid = self._prop_guid_to_module_guid.get(pg.lower())
+            if mod_guid and mod_guid not in seen:
+                result.append(mod_guid)
+                seen.add(mod_guid)
+
+        return result
