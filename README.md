@@ -151,13 +151,28 @@ converter/
 
 ## Known Limitations
 
-1. **Track/TrackGroup reconstruction**: The runtime format flattens the track group hierarchy. The decompiler reconstructs it from metadata attributes if present, but may produce a single default group if metadata is absent.
+### Irrecoverable from binary (decompile only)
 
-2. **Channel/keyframe mapping**: Animation data conversion between `Channel`/`Key` nodes (runtime) and `rampchanneldata`/`keyframe` elements (toolkit) is best-effort. The exact attribute-to-property-GUID binding for animation channels depends on runtime attribute names that may not be fully standardized.
+These are editor-only constructs that the BG3 runtime compiler strips when producing `.lsfx` files. They are preserved during `.lsefx` → `.lsfx` → `.lsefx` roundtrips if the source `.lsefx` contains them.
 
-3. **PropertyGroup and property ordering**: The toolkit uses `<propertygroup>` for UI organization. These are preserved during `.lsefx` → `.lsfx` → `.lsefx` roundtripping, but may not be reconstructed when decompiling from a binary that doesn't carry this metadata.
+- **Muted tracks and components** — fully stripped during compilation; decompiled output only contains the unmuted components that survived into the binary.
+- **Empty placeholder tracks** — the toolkit pads track groups with empty tracks for UI layout; no trace remains in the binary.
+- **FreeTangentSpline vs Spline** — both compile to the same polynomial `FrameType=1`; the decompiler emits `Spline` for all spline channels.
+- **`is_control_point` on keyframes** — an editor-only concept for Bézier handle editing; the binary stores evaluated polynomial segments, not control points.
+- **Module-level muting** — individual modules within a component can be muted in the toolkit; this state is not preserved in the binary.
+- **Original TrackGroup IDs** — the binary uses flat `Track` indices; the decompiler assigns sequential IDs starting from 1.
+- **Original PropertyGroup GUIDs** — the toolkit assigns random instance GUIDs; the decompiler generates deterministic UUIDs from the component instance name.
 
-4. **Dependencies region**: The runtime format includes a `<region id="Dependencies">` for resource references. This is not yet mapped into the toolkit format.
+### Best-effort reconstruction (decompile)
+
+These elements are reconstructed from AllSpark definitions and binary metadata. The output is structurally correct but may differ cosmetically from the original toolkit file.
+
+- **Track groups** — each unique `Track` index becomes its own track group with one track per component.
+- **Phases** — extracted from the binary with correct duration/playcount; `definitionid` values are resolved from the XCD's `PhaseDefinition` entries (Lead In / Loop / Lead Out by position).
+- **PropertyGroups** — always emitted as a single `"Property Group"` per component (matching the universal toolkit pattern).
+- **Modules** — reconstructed by matching property GUIDs to module definitions in the XMD; the `Required` module is always index 0.
+- **PlatformMetadata** — added to all ramp/keyframed properties with default expanded state (this is editor UI state that varies non-deterministically per instance).
+- **`mutestateoverride`** — defaults to `"None"` for decompiled tracks (the binary doesn't preserve the original override state).
 
 ## Development
 
